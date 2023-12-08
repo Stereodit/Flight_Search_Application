@@ -1,6 +1,7 @@
 package com.example.flightsearch.ui.screen
 
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -28,9 +30,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,12 +51,36 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.example.flightsearch.data.Airport
 import com.example.flightsearch.data.Favorite
+import com.example.flightsearch.model.Flight
 import com.example.flightsearch.ui.theme.FlightSearchTheme
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+enum class FlightScreens {
+    FavoriteFlights,
+    SearchingFlights
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen() {
+fun MainScreen(
+    viewModel: FlightViewModel = viewModel(factory = FlightViewModel.factory)
+) {
+    val navController = rememberNavController()
+    val uiState = viewModel.uiState.collectAsState()
+    val uiStatePreferences = viewModel.uiStatePreferences.collectAsState().value
+    val coroutineScope = rememberCoroutineScope()
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -66,13 +95,8 @@ fun MainScreen() {
         },
     ) { innerPadding ->
 
-        // this is the text users enter
-        var queryString by remember { mutableStateOf("") }
-
-        // if the search bar is active or not
-        var isActive by remember { mutableStateOf(false) }
-
-        val contextForToast = LocalContext.current.applicationContext
+        var queryString by rememberSaveable { mutableStateOf("") }
+        var isActive by rememberSaveable { mutableStateOf(false) }
 
         Column(
             modifier = Modifier.padding(innerPadding)
@@ -87,121 +111,84 @@ fun MainScreen() {
                 },
                 onSearch = {
                     isActive = false
-                    Toast.makeText(
-                        contextForToast,
-                        "Your query string: $queryString",
-                        Toast.LENGTH_SHORT
-                    )
-                        .show()
+                    viewModel.saveSearchBar(queryString)
+                    navController.navigate(FlightScreens.SearchingFlights.name)
                 },
                 active = isActive,
                 onActiveChange = { activeChange ->
                     isActive = activeChange
                 },
                 placeholder = {
-                    Text(text = "Search")
+                    Text(text = if(uiStatePreferences.searchString != "") "Are you looking for " + uiStatePreferences.searchString + "?" else "Search")
                 },
                 leadingIcon = {
                     Icon(imageVector = Icons.Default.Search, contentDescription = null)
                 }
             ) {
-
+                viewModel.getAirportsListBySearchString(queryString).forEach { airport ->
+                    ClickableText(
+                        text =
+                            buildAnnotatedString {
+                                withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                    append(airport.iataCode)
+                                }
+                                append("  ")
+                                append(airport.name)
+                            },
+                        onClick = {
+                            queryString = airport.iataCode
+                            isActive = false
+                            viewModel.saveSearchBar(queryString)
+                            navController.navigate(FlightScreens.SearchingFlights.name)
+                        },
+                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp, start = 16.dp, end = 16.dp)
+                    )
+                }
             }
-
-            ScreenContent(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(8.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun ScreenContent(
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-    ) {
-        Text(
-            text = "Favorite routes",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 16.dp, bottom = 16.dp)
-        )
-        LazyColumn {
-            items(5) { message ->
-                FlightCard(
-                    modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
-                    favoriteOrNot = false
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun FlightCard(
-    modifier: Modifier = Modifier,
-    favoriteOrNot: Boolean
-) {
-    Card(
-        shape = RoundedCornerShape(topStart = 0.dp, topEnd = 16.dp, bottomStart = 0.dp, bottomEnd = 0.dp),
-        modifier = modifier
-            .fillMaxWidth()
-    ) {
-        Row(
-            modifier = modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(text = "DEPART")
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text =
-                        buildAnnotatedString {
-                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append("IADA")
+            NavHost(
+                navController = navController,
+                startDestination = FlightScreens.FavoriteFlights.name
+            ) {
+                composable(FlightScreens.FavoriteFlights.name) {
+                    FavoriteScreenContent(
+                        favoriteFlightsList = viewModel.convertToFlightsList(uiState.value.favoriteList),
+                        onClick = {
+                            coroutineScope.launch {
+                                viewModel.deleteFavorite(it)
                             }
-                            append("  ")
-                            append("The name of the depart airport")
-                        }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(text = "ARRIVE")
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text =
-                        buildAnnotatedString {
-                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                                append("IADA")
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp)
+                    )
+                }
+                composable(FlightScreens.SearchingFlights.name) {
+                    SearchingScreenContent(
+                        searchingFlightsList = viewModel.getAllSearchingFlights(queryString),
+                        searchString = queryString,
+                        onClick = { favorite, isFavorite ->
+                            if (!isFavorite) {
+                                coroutineScope.launch {
+                                    viewModel.insertFavorite(favorite)
+                                }
+                            } else {
+                                coroutineScope.launch {
+                                    viewModel.deleteFavorite(favorite)
+                                }
                             }
-                            append("  ")
-                            append("The name of the arrive airport")
-                        }
-                )
+                        },
+                        onBackButtonClick = {
+                            navController.navigate(FlightScreens.FavoriteFlights.name)
+                            queryString = ""
+                            isActive = false
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp)
+                    )
+                }
             }
-            Icon(
-                Icons.Default.Star,
-                tint = if (favoriteOrNot) Color(255, 193, 7, 255) else Color.Gray,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(30.dp)
-            )
         }
-
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun MainScreenPreview() {
-    FlightSearchTheme {
-        MainScreen()
     }
 }
 
@@ -209,6 +196,13 @@ fun MainScreenPreview() {
 @Composable
 fun FavoriteFlightCardPreview() {
     FlightSearchTheme {
-        FlightCard(favoriteOrNot = true)
+        FavoriteFlightCard(
+            flight = Flight(
+                "ARN",
+                "Stockholm Arlanda Airport",
+                "WAW",
+                "Warsaw Chopin Airport"),
+            {}
+        )
     }
 }
